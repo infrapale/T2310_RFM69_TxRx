@@ -1,3 +1,30 @@
+/**
+T2310RFM69_TxRx 
+Send and receive data via UART
+
+https://github.com/infrapale/T2310_RFM69_TxRx
+
+Set Mode
+  <Mx> 
+    x = J -> json
+    x = R -> Raw message  (default)
+Send Raw message:
+  abc123
+Send json split message
+  "OD_1;Temp;23.1;-"  
+  ->
+  "{"Z":"OD_1","S":"Temp","V":23.1,"R":"-"}"
+Receive Raw Message
+  abc123
+Receive json message
+  "{"Z":"OD_1","S":"Temp","V":23.1,"R":"-"}"
+  ->
+  "OD_1;Temp;23.1;-"  
+
+
+
+
+**/
 
 // Define message groups to be supported (Astrid.h)
 #include <AstridAddrSpace.h>
@@ -6,71 +33,42 @@
 #include <Wire.h>
 #include <RH_RF69.h>
 #include <SPI.h>
-//#include <Astrid.h>
 #include <VillaAstridCommon.h>
 #include <SimpleTimer.h> 
-//#include <SmartLoop.h>
-#include <DHT.h>
+#include <secrets.h>
 
 
 
 #define ZONE  "OD_1"
 #define MINUTES_BTW_MSG   10
 
-// Software SPI (slower updates, more flexible pin options):
-// pin 7 - Serial clock out (SCLK)
-// pin 6 - Serial data out (DIN)
-// pin 5 - Data/Command select (D/C)
-// pin 4 - LCD chip select (CS)
-// pin 3 - LCD reset (RST)
-
-//DHT_Unified dht(DHTPIN, DHTTYPE);
-
-// Hardware SPI (faster, but must use certain hardware pins):
-// SCK is LCD serial clock (SCLK) - this is pin 13 on Arduino Uno
-// MOSI is LCD DIN - this is pin 11 on an Arduino Uno
-// pin 5 - Data/Command select (D/C)
-// pin 4 - LCD chip select (CS)
-// pin 3 - LCD reset (RST)
-// Adafruit_PCD8544 display = Adafruit_PCD8544(5, 4, 3);
-// Note with hardware SPI MISO and SS pins aren't used but will still be read
-// and written to during SPI transfer.  Be careful sharing these pins!
-
-//#define NUMFLAKES 10
-//#define XPOS 0
-//#define YPOS 1
-//#define DELTAY 2
-
-//#define DISPL_BUFF_LEN 10
-
-//#define LOGO16_GLCD_HEIGHT 16
-//#define LOGO16_GLCD_WIDTH  16
 
 //*********************************************************************************************
 // *********** IMPORTANT SETTINGS - YOU MUST CHANGE/ONFIGURE TO FIT YOUR HARDWARE *************
 //*********************************************************************************************
-#define NETWORKID     100  //the same on all nodes that talk to each other
-#define NODEID        10  
-#define BROADCAST     255
+#define NETWORKID         100  //the same on all nodes that talk to each other
+#define NODEID            10  
+#define BROADCAST         255
 #define MAX_MESSAGE_LEN   68
-#define RECEIVER      BROADCAST    // The recipient of packets
+#define RECEIVER          BROADCAST    // The recipient of packets
 //Match frequency to the hardware version of the radio on your Feather
-#define FREQUENCY     RF69_433MHZ
-//#define FREQUENCY     RF69_868MHZ
-//#define FREQUENCY      RF69_915MHZ
-#define ENCRYPTKEY     "sampleEncryptKey" //exactly the same 16 characters/bytes on all nodes!
-#define IS_RFM69HCW    true // set to 'true' if you are using an RFM69HCW module
+#define FREQUENCY         RF69_433MHZ
+//#define FREQUENCY       RF69_868MHZ
+//#define FREQUENCY       RF69_915MHZ
+//#define ENCRYPTKEY        "sampleEncryptKey" //exactly the same 16 characters/bytes on all nodes!
+#define IS_RFM69HCW       true // set to 'true' if you are using an RFM69HCW module
 
 //*********************************************************************************************
 #define SERIAL_BAUD   9600
 
 // Change to 434.0 or other frequency, must match RX's freq!
-#define RF69_FREQ   434.0  //915.0
+#define RF69_FREQ     434.0  //915.0
 #define RFM69_CS      10
 #define RFM69_INT     2
 #define RFM69_IRQN    0  // Pin 2 is IRQ 0!
 #define RFM69_RST     9
-#define ENCRYPTKEY     "VillaAstrid_2003" //exactly the same 16 characters/bytes on all nodes!
+//#define ENCRYPTKEY    "VillaAstrid_2003" //exactly the same 16 characters/bytes on all nodes!
+#define ENCRYPTKEY    RFM69_KEY   // defined in secret.h
 
 #define LED           13  // onboard blinky
 
@@ -80,7 +78,6 @@ int16_t packetnum = 0;  // packet counter, we increment per xmission
 boolean msgReady;       //Serial.begin(SERIAL_BAUD
 boolean SerialFlag;
 RH_RF69 rf69(RFM69_CS, RFM69_INT);
-SFE_BMP180 bmp180;
 
 SimpleTimer timer;
 char radio_packet[MAX_MESSAGE_LEN];
@@ -96,7 +93,6 @@ void setup() {
     delay(2000);
     Serial.begin(9600);
     //Smart.begin(9600);
-    dht.begin();
     Serial.println("T187 RFM69HCW Radio Sensor");
   
     // Hard Reset the RFM module
@@ -133,13 +129,58 @@ void setup() {
     timer.setInterval(10000, run_10s);
 }
 
+void send_rfm69_message(String str)
+{
+  char cbuff[MAX_MESSAGE_LEN];
+    str.toCharArray(cbuff,MAX_MESSAGE_LEN);
+    Serial.println(cbuff);
+    radiate_msg(cbuff);
+}
+
+void receive_rfm69_message(void)
+{
+    if (rf69.available()) 
+    {
+        uint8_t buf[RH_RF69_MAX_MESSAGE_LEN];
+        uint8_t len = sizeof(buf);
+        if (rf69.recv(buf, &len)) 
+        {
+            if (len > 0)
+            {
+                buf[len] = 0;
+                Serial.print("Received [");
+                Serial.print(len);
+                Serial.print("]: ");
+                Serial.println((char*)buf);
+                Serial.print("RSSI: ");
+                Serial.println(rf69.lastRssi(), DEC);
+            }
+        }
+    }
+}
+
+
 void loop() {
     timer.run();
     byte i;
+    String buff;
+    char cbuff[80];
+    String jstr;
+    String vstr;
 
-    String tempString;
-    char radiopacket[30];  // = "Hello World #";
+    buff = Serial.readStringUntil('\n');
+    if (buff.length()> 0)
+    {
+        buff.remove(buff.length()-1);
+        send_rfm69_message(buff);
+    }
+    receive_rfm69_message();
 
+    convert_sensor_json_data("OD_1;Temp;23.1;-",&jstr);
+    Serial.println(jstr);
+
+    parse_sensor_json_str(jstr,&vstr);
+    Serial.println(vstr);
 }
 
 int ConvertFloatSensorToJsonRadioPacket(char *zone, char *sensor, float value, char *remark ){
@@ -173,6 +214,71 @@ int ConvertFloatSensorToJsonRadioPacket(char *zone, char *sensor, float value, c
       Serial.println(json_len);
       return(0);
     }
+}
+
+void convert_sensor_json_data(String sensor_values, String *json_str)
+{
+    //  Input:  "OD_1;Temp;23.1;-"
+    //  Output: "{"Z":"OD_1","S":"Temp","V":23.1,"R":"-"}"
+    uint8_t indx1;
+    uint8_t indx2;
+    indx1 = 0;
+    indx2 = sensor_values.indexOf(';');
+    *json_str = "{\"Z\":\"";
+    *json_str += sensor_values.substring(indx1,indx2);
+    *json_str += "\",\"S\":\"";
+    indx1 = indx2+1;
+    indx2 = sensor_values.indexOf(';',indx1+1);
+    *json_str += sensor_values.substring(indx1,indx2);
+    *json_str += "\",\"V\":";
+    indx1 = indx2+1;
+    indx2 = sensor_values.indexOf(';',indx1+1);
+    *json_str += sensor_values.substring(indx1,indx2);
+    *json_str += ",\"R\":\"";
+    indx1 = indx2+1;
+    indx2 = sensor_values.indexOf(';',indx1+1);
+    *json_str += sensor_values.substring(indx1,indx2);
+    *json_str += "\"}";
+}
+
+void parse_sensor_json_str(String json_str, String *value_str)
+{
+    //  json_str: "{"Z":"OD_1","S":"Temp","V":23.1,"R":"-"}"
+    // ->
+    //  value_str:  "OD_1;Temp;23.1;-"
+    *value_str = parse_json_tag(json_str, "{\"Z");
+    *value_str += ';';
+    *value_str += parse_json_tag(json_str, ",\"S");
+    *value_str += ';';
+    *value_str += parse_json_tag(json_str, ",\"V");
+    *value_str += ';';
+    *value_str += parse_json_tag(json_str, ",\"R");
+
+}
+
+
+String parse_json_tag(String json_str, char *tag){
+   int pos1;
+   int pos2;
+   //Serial.println(fromStr); Serial.println(tag);
+   pos1 = json_str.indexOf(tag);
+   if (pos1 >= 0){
+       if (tag == ",\"V"){
+          pos1 = json_str.indexOf(":",pos1) +1;
+          if (json_str.charAt(pos1) == '\"') pos1++;
+          pos2 = json_str.indexOf(",",pos1);
+          if (json_str.charAt(pos2-1) == '\"') pos2--;
+       }
+       else{
+          pos1 = json_str.indexOf(":\"",pos1) +2;
+          pos2 = json_str.indexOf("\"",pos1);
+       }
+       return(json_str.substring(pos1,pos2)); 
+   }
+   else {
+      return("");
+   }
+    
 }
 
 void radiate_msg( char *radio_msg )
